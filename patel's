@@ -1,0 +1,117 @@
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
+from sklearn.compose import ColumnTransformer
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import roc_auc_score, log_loss
+
+# ==========================================
+# 1. USER CONFIGURATION (EDIT THIS PART ONLY)
+# ==========================================
+TRAIN_PATH = "/kaggle/input/ai-201-b-mse-2-aiml-c/train.csv"
+TEST_PATH = "/kaggle/input/ai-201-b-mse-2-aiml-c/test.csv"
+TARGET_COL = "NObeyesdad"
+ID_COL = "id"
+OUTPUT_FILE = "submission.csv"
+# ==========================================
+
+# 2. Load Data
+print("Loading data...")
+train_data = pd.read_csv(TRAIN_PATH)
+test_data = pd.read_csv(TEST_PATH)
+
+print(f"Train shape: {train_data.shape}")
+print(f"Test shape: {test_data.shape}")
+
+# 3. Handle ID Columns
+test_ids = test_data[ID_COL]
+
+if ID_COL in train_data.columns:
+    train_data = train_data.drop(columns=[ID_COL])
+if ID_COL in test_data.columns:
+    test_data = test_data.drop(columns=[ID_COL])
+
+# 4. Separate Features (X) and Target (y)
+X = train_data.drop(columns=[TARGET_COL])
+y = train_data[TARGET_COL]
+
+# 5. Dynamic Feature Selection
+cat_cols = X.select_dtypes(include=['object', 'category']).columns.tolist()
+num_cols = X.select_dtypes(include=['number']).columns.tolist()
+
+print(f"\nDetected {len(cat_cols)} categorical columns: {cat_cols}")
+print(f"Detected {len(num_cols)} numerical columns: {num_cols}")
+
+# 6. Impute Missing Values
+print("\nImputing missing values...")
+
+if num_cols:
+    mean_vals = X[num_cols].mean()
+    X[num_cols] = X[num_cols].fillna(mean_vals)
+    test_data[num_cols] = test_data[num_cols].fillna(mean_vals)
+
+if cat_cols:
+    mode_vals = X[cat_cols].mode().iloc[0]
+    X[cat_cols] = X[cat_cols].fillna(mode_vals)
+    test_data[cat_cols] = test_data[cat_cols].fillna(mode_vals)
+
+# 7. Visualization (Optional)
+plt.figure(figsize=(6, 4))
+sns.countplot(x=TARGET_COL, data=train_data)
+plt.title(f"Class Distribution for {TARGET_COL}")
+plt.show()
+
+# 8. Define Preprocessor
+preprocessor = ColumnTransformer(transformers=[
+    ('cat', OneHotEncoder(handle_unknown='ignore'), cat_cols),
+    ('num', StandardScaler(), num_cols)
+])
+
+# 9. Train/Validation Split
+X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=0.3, random_state=42)
+
+# 10. Fit Preprocessor
+print("\nTransforming data...")
+X_train_pre = preprocessor.fit_transform(X_train)
+X_val_pre = preprocessor.transform(X_val)
+test_data_pre = preprocessor.transform(test_data)
+
+# 11. Train Model
+print("\nTraining Random Forest...")
+rfc = RandomForestClassifier(n_estimators=1000, random_state=42, class_weight='balanced')
+rfc.fit(X_train_pre, y_train)
+
+# 12. Evaluate
+print("Evaluating model...")
+val_proba = rfc.predict_proba(X_val_pre)
+
+try:
+    roc = roc_auc_score(y_val, val_proba, multi_class='ovr', average='macro')
+    loss = log_loss(y_val, val_proba)
+    print(f"Validation ROC AUC: {roc:.4f}")
+    print(f"Validation Log Loss: {loss:.4f}")
+except ValueError as e:
+    print(f"Could not calculate metrics: {e}")
+
+# ==========================================
+# 13. FIXED SUBMISSION (No more 7 columns!)
+# ==========================================
+
+print("\nGenerating submission...")
+
+# Convert probabilities → final class label (argmax)
+test_pred = rfc.predict(test_data_pre)
+
+# FINAL submission DataFrame
+submission_df = pd.DataFrame({
+    ID_COL: test_ids,
+    TARGET_COL: test_pred
+})
+
+# Save file
+submission_df.to_csv(OUTPUT_FILE, index=False)
+print(f"Correct submission saved to {OUTPUT_FILE}")
+print(submission_df.head())
